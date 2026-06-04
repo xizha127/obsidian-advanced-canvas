@@ -100,6 +100,7 @@ export interface AdvancedCanvasPluginSettingsValues {
   showEdgesIntoDisabledPortals: boolean
 
   charkoalSupportEnabled: boolean
+  charkoalNestedCanvasFolder: string
 
   autoFileNodeEdgesFeatureEnabled: boolean
   autoFileNodeEdgesFrontmatterKey: string
@@ -199,6 +200,7 @@ export const DEFAULT_SETTINGS_VALUES: AdvancedCanvasPluginSettingsValues = {
   showEdgesIntoDisabledPortals: true,
 
   charkoalSupportEnabled: true,
+  charkoalNestedCanvasFolder: '80-89 Media & Visual Thinking/82 Canvas Notes',
 
   autoFileNodeEdgesFeatureEnabled: false,
   autoFileNodeEdgesFrontmatterKey: 'canvas-edges',
@@ -344,7 +346,15 @@ export const SETTINGS = {
   charkoalSupportEnabled: {
     label: 'Charkoal compatibility',
     description: 'Render and preserve Charkoal nested canvas nodes when editing canvas files in Obsidian.',
-    children: { }
+    children: {
+      charkoalNestedCanvasFolder: {
+        label: 'Nested canvas folder',
+        description: 'Vault folder used for generated canvas files that back Charkoal nested canvases.',
+        type: 'text',
+        parse: (value: string) => value.trim().replace(/^\/+|\/+$/g, ''),
+        disabled: (settingsManager: SettingsManager) => !settingsManager.getSetting('charkoalSupportEnabled')
+      }
+    }
   },
   collapsibleGroupsFeatureEnabled: {
     label: 'Collapsible groups',
@@ -804,6 +814,7 @@ export class AdvancedCanvasPluginSettingTab extends PluginSettingTab {
       .setName(setting.label)
       .setDesc(setting.description)
       .addText(text => text
+        .setDisabled(setting.disabled?.(this.settingsManager) ?? false)
         .setValue(this.settingsManager.getSetting(settingId) as string)
         .onChange(async (value) => {
           await this.settingsManager.setSetting({ [settingId]: setting.parse ? setting.parse(value) : value })

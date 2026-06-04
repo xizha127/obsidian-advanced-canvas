@@ -1,7 +1,7 @@
 {
   "id": "advanced-canvas",
   "name": "Advanced Canvas",
-  "version": "6.2.0-charkoal.1",
+  "version": "6.2.0-charkoal.2",
   "minAppVersion": "1.7.2",
   "description": "Advanced Canvas fork with Charkoal canvas compatibility.",
   "author": "Developer-Mike",

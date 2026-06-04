@@ -16,6 +16,7 @@ export interface Setting {
   type: null | 'text' | 'number' | 'dimension' | 'boolean' | 'dropdown' | 'button' | 'styles'
 
   parse?: (value: unknown) => unknown
+  disabled?: (settingsManager: SettingsManager) => boolean
 }
 
 export interface StyleAttributesSetting extends Setting {

@@ -1,158 +1,202 @@
-import { AnyCanvasNodeData, CanvasData, CanvasEdgeData, CanvasGroupNodeData, CharkoalAnyCanvasNodeData, CharkoalCanvasData, CharkoalNestedCanvasNodeData } from "src/@types/AdvancedJsonCanvas"
-import { Canvas, CanvasElementsData } from "src/@types/Canvas"
+import { normalizePath, TFile } from "obsidian"
+import { AnyCanvasNodeData, CanvasData, CanvasFileNodeData, CharkoalAnyCanvasNodeData, CharkoalCanvasData, CharkoalNestedCanvasNodeData } from "src/@types/AdvancedJsonCanvas"
+import { Canvas } from "src/@types/Canvas"
 import CanvasExtension from "./canvas-extension"
 
-const ID_PREFIX = 'accharkoal||'
-const ID_DELIMITER = '||'
-const NESTED_PADDING = 50
-
-// LLM-assisted compatibility layer: preserve Charkoal's inline nested-canvas format while Obsidian renders supported nodes.
+// LLM-assisted compatibility layer: materialize Charkoal inline canvases as Advanced Canvas portals.
 export default class CharkoalNestedCanvasExtension extends CanvasExtension {
+  private generatedCanvasCache = new Map<string, CanvasData>()
+  private pendingMaterializations = new Map<string, Promise<void>>()
+
   isEnabled() { return 'charkoalSupportEnabled' as const }
 
   init() {
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       'advanced-canvas:raw-data-loaded:before',
-      (data: CanvasData, changedRef: { value: boolean }) => {
-        changedRef.value = this.expandNestedCanvases(data) || changedRef.value
+      (data: CanvasData, changedRef: { value: boolean }, sourceFilePath: string) => {
+        changedRef.value = this.convertNestedCanvasesToPortals(data, sourceFilePath) || changedRef.value
       }
     ))
 
     this.plugin.registerEvent(this.plugin.app.workspace.on(
-      'advanced-canvas:data-loaded:before',
-      (_canvas: Canvas, data: CanvasData) => this.expandNestedCanvases(data)
+      'advanced-canvas:data-loaded:after',
+      (canvas: Canvas, data: CanvasData) => this.refreshAfterMaterialization(canvas, data)
     ))
 
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       'advanced-canvas:data-requested',
-      (_canvas: Canvas, data: CanvasData) => this.collapseNestedCanvases(data)
+      (canvas: Canvas, data: CanvasData) => {
+        if (this.isInGeneratedFolder(canvas.view.file.path)) return
+        this.convertPortalsToNestedCanvases(data)
+      }
     ))
+
+    this.plugin.registerEvent(this.plugin.app.vault.on('modify', (file: TFile) => {
+      if (file.extension !== 'canvas' || !this.isInGeneratedFolder(file.path)) return
+      void this.cacheGeneratedCanvas(file)
+    }))
   }
 
-  private expandNestedCanvases(data: CanvasData): boolean {
+  private convertNestedCanvasesToPortals(data: CanvasData, sourceFilePath: string): boolean {
     const nodes = data?.nodes as CharkoalAnyCanvasNodeData[] | undefined
     if (!nodes?.some(node => node.type === 'nested-canvas')) return false
 
-    const expanded = this.expandCanvas({ nodes, edges: data.edges }, [])
-    data.nodes = expanded.nodes
-    data.edges = expanded.edges
+    data.nodes = nodes.map(node => this.convertNodeToPortal(node, sourceFilePath)) as AnyCanvasNodeData[]
     return true
   }
 
-  private expandCanvas(source: CharkoalCanvasData, parentPath: string[]): CanvasElementsData {
-    const nodes: AnyCanvasNodeData[] = []
-    const edges: CanvasEdgeData[] = source.edges.map(edge => this.prefixEdge(edge, parentPath))
+  private convertNodeToPortal(node: CharkoalAnyCanvasNodeData, sourceFilePath: string): CharkoalAnyCanvasNodeData {
+    if (node.type !== 'nested-canvas') return node
 
-    for (const sourceNode of source.nodes) {
-      const nodePath = [...parentPath, sourceNode.id]
-      const node = this.prefixNode(sourceNode, parentPath)
-
-      if (sourceNode.type !== 'nested-canvas') {
-        nodes.push(node as AnyCanvasNodeData)
-        continue
-      }
-
-      const nestedNode = sourceNode
-      const sourceMinX = this.getMinimumCoordinate(nestedNode.canvas.nodes, 'x')
-      const sourceMinY = this.getMinimumCoordinate(nestedNode.canvas.nodes, 'y')
-      const groupNode: CanvasGroupNodeData = {
-        ...node,
-        type: 'group',
-        label: nestedNode.title,
-        charkoalNestedCanvas: {
-          original: this.withoutCanvas(nestedNode),
-          sourceMinX,
-          sourceMinY
-        }
-      }
-
-      nodes.push(groupNode)
-
-      const nestedData = this.expandCanvas(nestedNode.canvas, nodePath)
-      const offsetX = groupNode.x - sourceMinX + NESTED_PADDING
-      const offsetY = groupNode.y - sourceMinY + NESTED_PADDING
-      nodes.push(...nestedData.nodes.map(childNode => ({
-        ...childNode,
-        x: childNode.x + offsetX,
-        y: childNode.y + offsetY
-      })))
-      edges.push(...nestedData.edges)
+    const generatedFile = this.getGeneratedFilePath(sourceFilePath, node)
+    const generatedData: CanvasData = {
+      metadata: {
+        version: '1.0-1.0',
+        frontmatter: { }
+      },
+      nodes: node.canvas.nodes.map(childNode => this.convertNodeToPortal(childNode, generatedFile)) as AnyCanvasNodeData[],
+      edges: node.canvas.edges
     }
 
-    return { nodes, edges }
+    this.generatedCanvasCache.set(generatedFile, generatedData)
+    this.scheduleMaterialization(generatedFile, generatedData, sourceFilePath)
+
+    const portalNode: CanvasFileNodeData = {
+      ...this.withoutCanvas(node),
+      type: 'file',
+      file: generatedFile,
+      portal: true,
+      charkoalNestedCanvas: {
+        original: this.withoutCanvas(node),
+        generatedFile
+      }
+    }
+
+    return portalNode
   }
 
-  private collapseNestedCanvases(data: CanvasData) {
+  private convertPortalsToNestedCanvases(data: CanvasData) {
     if (!data?.nodes) return
 
-    const topLevelNodes = data.nodes.filter(node => !this.isTemporaryId(node.id))
-    const topLevelEdges = data.edges.filter(edge => !this.isTemporaryId(edge.id))
-
-    data.nodes = topLevelNodes.map(node => this.restoreNode(node, data)) as AnyCanvasNodeData[]
-    data.edges = topLevelEdges
+    data.nodes = data.nodes.map(node => this.convertPortalToNestedCanvas(node)) as AnyCanvasNodeData[]
   }
 
-  private restoreNode(node: AnyCanvasNodeData, data: CanvasData): CharkoalAnyCanvasNodeData {
-    const groupNode = node as CanvasGroupNodeData
-    if (groupNode.type !== 'group' || !groupNode.charkoalNestedCanvas) return node
+  private convertPortalToNestedCanvas(node: AnyCanvasNodeData): CharkoalAnyCanvasNodeData {
+    const portalNode = node as CanvasFileNodeData
+    if (portalNode.type !== 'file' || !portalNode.charkoalNestedCanvas) return node
 
-    const intermediate = groupNode.charkoalNestedCanvas
-    const nestedCanvas = this.restoreCanvas(groupNode, data)
-    const restored: CharkoalNestedCanvasNodeData = {
+    const intermediate = portalNode.charkoalNestedCanvas
+    const generatedData = this.generatedCanvasCache.get(intermediate.generatedFile) ?? this.emptyCanvasData()
+    const nestedCanvas: CharkoalCanvasData = {
+      nodes: generatedData.nodes.map(childNode => this.convertPortalToNestedCanvas(childNode)),
+      edges: generatedData.edges
+    }
+
+    return {
       ...intermediate.original,
       type: 'nested-canvas',
-      id: groupNode.id,
-      x: groupNode.x,
-      y: groupNode.y,
-      width: groupNode.width,
-      height: groupNode.height,
-      color: groupNode.color,
-      title: groupNode.label ?? intermediate.original.title,
+      id: portalNode.id,
+      x: portalNode.x,
+      y: portalNode.y,
+      width: portalNode.width,
+      height: portalNode.height,
+      color: portalNode.color,
       canvas: nestedCanvas
     }
-
-    return restored
   }
 
-  private restoreCanvas(parent: CanvasGroupNodeData, data: CanvasData): CharkoalCanvasData {
-    const parentPath = this.getPath(parent.id)
-    const childNodes = data.nodes.filter(node => this.isDirectChild(node.id, parentPath))
-    const childEdges = data.edges.filter(edge => this.isDirectChild(edge.id, parentPath))
-    const intermediate = parent.charkoalNestedCanvas!
-    const offsetX = parent.x - intermediate.sourceMinX + NESTED_PADDING
-    const offsetY = parent.y - intermediate.sourceMinY + NESTED_PADDING
+  private refreshAfterMaterialization(canvas: Canvas, data: CanvasData) {
+    const pending = data.nodes
+      .map(node => (node as CanvasFileNodeData).charkoalNestedCanvas?.generatedFile)
+      .filter((path): path is string => path !== undefined)
+      .map(path => this.pendingMaterializations.get(path))
+      .filter((promise): promise is Promise<void> => promise !== undefined)
 
-    return {
-      nodes: childNodes.map(node => {
-        const restoredNode = this.restoreNode(node, data)
-        return {
-          ...restoredNode,
-          id: this.lastPathPart(node.id),
-          x: restoredNode.x - offsetX,
-          y: restoredNode.y - offsetY
-        }
-      }),
-      edges: childEdges.map(edge => ({
-        ...edge,
-        id: this.lastPathPart(edge.id),
-        fromNode: this.lastPathPart(edge.fromNode),
-        toNode: this.lastPathPart(edge.toNode)
-      }))
+    if (pending.length === 0) return
+
+    void Promise.all(pending).then(() => {
+      canvas.setData(data)
+    })
+  }
+
+  private scheduleMaterialization(targetPath: string, data: CanvasData, sourceFilePath: string) {
+    if (this.pendingMaterializations.has(targetPath)) return
+
+    const promise = this.materializeCanvas(targetPath, data, sourceFilePath)
+      .catch(error => console.error(`Failed to materialize Charkoal nested canvas at ${targetPath}:`, error))
+      .finally(() => this.pendingMaterializations.delete(targetPath))
+
+    this.pendingMaterializations.set(targetPath, promise)
+  }
+
+  private async materializeCanvas(targetPath: string, data: CanvasData, sourceFilePath: string) {
+    const targetFile = this.plugin.app.vault.getFileByPath(targetPath)
+    const sourceFile = this.plugin.app.vault.getFileByPath(sourceFilePath)
+
+    if (targetFile && sourceFile && targetFile.stat.mtime > sourceFile.stat.mtime) {
+      await this.cacheGeneratedCanvas(targetFile)
+      return
+    }
+
+    await this.ensureFolder(targetPath.substring(0, targetPath.lastIndexOf('/')))
+    const content = JSON.stringify(data, null, 2)
+
+    if (targetFile) await this.plugin.app.vault.modify(targetFile, content)
+    else await this.plugin.app.vault.create(targetPath, content)
+
+    this.generatedCanvasCache.set(targetPath, data)
+  }
+
+  private async cacheGeneratedCanvas(file: TFile) {
+    try {
+      const data = JSON.parse(await this.plugin.app.vault.cachedRead(file)) as CanvasData
+      this.generatedCanvasCache.set(file.path, data)
+
+      for (const canvas of this.plugin.getCanvases()) {
+        if (!this.canvasReferencesGeneratedFile(canvas, file.path)) continue
+        canvas.requestSave()
+      }
+    } catch (error) {
+      console.error(`Failed to cache generated Charkoal canvas at ${file.path}:`, error)
     }
   }
 
-  private prefixNode(node: CharkoalAnyCanvasNodeData, parentPath: string[]): CharkoalAnyCanvasNodeData {
-    if (parentPath.length === 0) return { ...node }
-    return { ...node, id: this.makeTemporaryId([...parentPath, node.id]) }
+  private canvasReferencesGeneratedFile(canvas: Canvas, filePath: string): boolean {
+    return [...canvas.nodes.values()].some(node => {
+      const data = node.getData() as CanvasFileNodeData
+      return data.type === 'file' && data.charkoalNestedCanvas?.generatedFile === filePath
+    })
   }
 
-  private prefixEdge(edge: CanvasEdgeData, parentPath: string[]): CanvasEdgeData {
-    if (parentPath.length === 0) return { ...edge }
-    return {
-      ...edge,
-      id: this.makeTemporaryId([...parentPath, edge.id]),
-      fromNode: this.makeTemporaryId([...parentPath, edge.fromNode]),
-      toNode: this.makeTemporaryId([...parentPath, edge.toNode])
+  private getGeneratedFilePath(sourceFilePath: string, node: CharkoalNestedCanvasNodeData): string {
+    const baseFolder = normalizePath(this.plugin.settings.getSetting('charkoalNestedCanvasFolder'))
+    const sourceWithoutExtension = sourceFilePath.replace(/\.canvas$/i, '')
+    const relativeSource = sourceWithoutExtension.startsWith(`${baseFolder}/`)
+      ? sourceWithoutExtension.substring(baseFolder.length + 1)
+      : sourceWithoutExtension
+    const sourceFolder = relativeSource.split('/').map(part => this.sanitizePathPart(part)).join('/')
+    const fileName = `${this.sanitizePathPart(node.title || 'Nested canvas')}--${this.sanitizePathPart(node.id)}.canvas`
+    return normalizePath(`${baseFolder}/${sourceFolder}/${fileName}`)
+  }
+
+  private sanitizePathPart(value: string): string {
+    return value.replace(/[\\/:*?"<>|]/g, '-').replace(/\s+/g, ' ').trim() || 'Untitled'
+  }
+
+  private isInGeneratedFolder(path: string): boolean {
+    const folder = normalizePath(this.plugin.settings.getSetting('charkoalNestedCanvasFolder'))
+    return path === folder || path.startsWith(`${folder}/`)
+  }
+
+  private async ensureFolder(folderPath: string) {
+    if (!folderPath) return
+
+    const parts = normalizePath(folderPath).split('/')
+    let current = ''
+    for (const part of parts) {
+      current = current ? `${current}/${part}` : part
+      if (!this.plugin.app.vault.getAbstractFileByPath(current))
+        await this.plugin.app.vault.createFolder(current)
     }
   }
 
@@ -162,32 +206,14 @@ export default class CharkoalNestedCanvasExtension extends CanvasExtension {
     return result as Omit<CharkoalNestedCanvasNodeData, 'canvas'>
   }
 
-  private isDirectChild(id: string, parentPath: string[]): boolean {
-    const path = this.getPath(id)
-    return path.length === parentPath.length + 1 &&
-      parentPath.every((part, index) => path[index] === part)
-  }
-
-  private isTemporaryId(id: string): boolean {
-    return id.startsWith(ID_PREFIX)
-  }
-
-  private makeTemporaryId(path: string[]): string {
-    return ID_PREFIX + path.map(encodeURIComponent).join(ID_DELIMITER)
-  }
-
-  private getPath(id: string): string[] {
-    if (!this.isTemporaryId(id)) return [id]
-    return id.substring(ID_PREFIX.length).split(ID_DELIMITER).map(decodeURIComponent)
-  }
-
-  private getMinimumCoordinate(nodes: CharkoalAnyCanvasNodeData[], coordinate: 'x' | 'y'): number {
-    if (nodes.length === 0) return 0
-    return Math.min(...nodes.map(node => node[coordinate]))
-  }
-
-  private lastPathPart(id: string): string {
-    const path = this.getPath(id)
-    return path[path.length - 1]!
+  private emptyCanvasData(): CanvasData {
+    return {
+      metadata: {
+        version: '1.0-1.0',
+        frontmatter: { }
+      },
+      nodes: [],
+      edges: []
+    }
   }
 }
