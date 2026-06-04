@@ -1,5 +1,5 @@
 import { Menu, setIcon, setTooltip, TFile } from "obsidian"
-import { CanvasFileNodeData } from "src/@types/AdvancedJsonCanvas"
+import { CanvasData, CanvasFileNodeData } from "src/@types/AdvancedJsonCanvas"
 import { Canvas, CanvasNode, Position, Size } from "src/@types/Canvas"
 import CanvasHelper from "src/utils/canvas-helper"
 import { FileNameModal } from "src/utils/modal-helper"
@@ -7,6 +7,7 @@ import CanvasExtension from "./canvas-extension"
 
 const DEFAULT_NODE_SIZE: Size = { width: 320, height: 120 }
 const EXPAND_BUTTON_CLASS = 'nested-portal-expand-button'
+const PARENT_NAV_CLASS = 'nested-canvas-parent-nav'
 
 // LLM-assisted Obsidian-first nested canvas workflow built on standard Advanced Canvas portals.
 export default class NestedPortalsCanvasExtension extends CanvasExtension {
@@ -28,6 +29,7 @@ export default class NestedPortalsCanvasExtension extends CanvasExtension {
       (canvas: Canvas) => {
         this.refreshCanvasNodes(canvas)
         this.addCardMenuButton(canvas)
+        this.addParentNavigation(canvas)
       }
     ))
 
@@ -43,32 +45,29 @@ export default class NestedPortalsCanvasExtension extends CanvasExtension {
 
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       'canvas:node-menu',
-      (menu: Menu, node: CanvasNode) => this.addCreateNestedCanvasMenuItem(menu, node.canvas)
-    ))
-
-    this.plugin.registerEvent(this.plugin.app.workspace.on(
-      'canvas:selection-menu',
-      (menu: Menu, canvas: Canvas) => this.addCreateNestedCanvasMenuItem(menu, canvas)
+      (menu: Menu, node: CanvasNode) => this.addCreateNestedCanvasMenuItem(menu, node)
     ))
 
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       'advanced-canvas:popup-menu-created',
-      (canvas: Canvas) => this.addPopupCreateButton(canvas)
+      (canvas: Canvas) => this.addSelectedCanvasCreateButton(canvas)
     ))
   }
 
-  private addCreateNestedCanvasMenuItem(menu: Menu, canvas: Canvas) {
-    if (canvas.readonly) return
+  private addCreateNestedCanvasMenuItem(menu: Menu, node: CanvasNode) {
+    if (node.canvas.readonly || !this.isCanvasFileNode(node)) return
 
     menu.addItem(item => item
       .setTitle('Create nested canvas')
       .setIcon('folder-plus')
-      .onClick(() => void this.createNestedCanvas(canvas, CanvasHelper.getCenterCoordinates(canvas, DEFAULT_NODE_SIZE)))
+      .onClick(() => void this.createNestedCanvasInFile(node.file!))
     )
   }
 
-  private addPopupCreateButton(canvas: Canvas) {
+  private addSelectedCanvasCreateButton(canvas: Canvas) {
     if (canvas.readonly) return
+    const node = this.getSelectedCanvasFileNode(canvas)
+    if (!node) return
 
     CanvasHelper.addPopupMenuOption(
       canvas,
@@ -76,7 +75,7 @@ export default class NestedPortalsCanvasExtension extends CanvasExtension {
         id: 'create-nested-canvas',
         label: 'Create nested canvas',
         icon: 'folder-plus',
-        callback: () => void this.createNestedCanvas(canvas, CanvasHelper.getCenterCoordinates(canvas, DEFAULT_NODE_SIZE))
+        callback: () => void this.createNestedCanvasInFile(node.file!)
       })
     )
   }
@@ -100,7 +99,41 @@ export default class NestedPortalsCanvasExtension extends CanvasExtension {
   }
 
   private async createNestedCanvas(canvas: Canvas, pos: Position) {
-    const parentCanvasPath = canvas.view.file.path
+    const file = await this.createNestedCanvasFile(canvas.view.file.path)
+    const node = canvas.createFileNode({
+      pos,
+      size: DEFAULT_NODE_SIZE,
+      file
+    })
+
+    node.setData({
+      ...node.getData(),
+      portal: false
+    } as CanvasFileNodeData)
+  }
+
+  private async createNestedCanvasInFile(parentFile: TFile) {
+    const file = await this.createNestedCanvasFile(parentFile.path)
+    const parentData = JSON.parse(await this.plugin.app.vault.cachedRead(parentFile)) as CanvasData
+    parentData.nodes ??= []
+    parentData.edges ??= []
+
+    const pos = this.getNextNodePosition(parentData)
+    parentData.nodes.push({
+      id: crypto.randomUUID(),
+      type: 'file',
+      file: file.path,
+      portal: false,
+      x: pos.x,
+      y: pos.y,
+      width: DEFAULT_NODE_SIZE.width,
+      height: DEFAULT_NODE_SIZE.height
+    })
+
+    await this.plugin.app.vault.modify(parentFile, JSON.stringify(parentData, null, 2))
+  }
+
+  private async createNestedCanvasFile(parentCanvasPath: string): Promise<TFile> {
     const targetFolderPath = parentCanvasPath.replace(/\.canvas$/i, '')
     await this.ensureFolder(targetFolderPath)
 
@@ -113,18 +146,7 @@ export default class NestedPortalsCanvasExtension extends CanvasExtension {
       ? selectedFilePath
       : `${targetFolderPath}/${selectedFilePath.split('/').last()!}`
 
-    const file = await this.plugin.app.vault.create(targetFilePath, JSON.stringify({ nodes: [], edges: [] }, null, 2))
-    const node = canvas.createFileNode({
-      pos,
-      size: DEFAULT_NODE_SIZE,
-      file
-    })
-
-    node.setData({
-      ...node.getData(),
-      portal: true
-    } as CanvasFileNodeData)
-    canvas.setData(canvas.getData())
+    return this.plugin.app.vault.create(targetFilePath, JSON.stringify({ nodes: [], edges: [] }, null, 2))
   }
 
   private refreshCanvasNodes(canvas: Canvas) {
@@ -132,8 +154,7 @@ export default class NestedPortalsCanvasExtension extends CanvasExtension {
   }
 
   private refreshNode(node: CanvasNode) {
-    const nodeData = node.getData() as CanvasFileNodeData
-    const isCanvasFile = nodeData.type === 'file' && node.file?.extension === 'canvas'
+    const isCanvasFile = this.isCanvasFileNode(node)
     node.nodeEl.dataset.isCanvasFileNode = isCanvasFile ? 'true' : 'false'
 
     node.nodeEl.querySelector(`.${EXPAND_BUTTON_CLASS}`)?.remove()
@@ -142,29 +163,66 @@ export default class NestedPortalsCanvasExtension extends CanvasExtension {
     const target = node.labelEl ?? node.nodeEl
     const button = target.createEl('button')
     button.classList.add(EXPAND_BUTTON_CLASS, 'clickable-icon')
-    setIcon(button, nodeData.portal ? 'minimize-2' : 'maximize-2')
-    setTooltip(button, nodeData.portal ? 'Collapse child canvas' : 'Expand child canvas', { placement: 'top' })
+    setIcon(button, 'maximize-2')
+    setTooltip(button, 'Open child canvas', { placement: 'top' })
 
     button.addEventListener('pointerdown', event => event.stopPropagation())
     button.addEventListener('click', event => {
       event.stopPropagation()
-      this.togglePortal(node)
+      void this.openCanvasFile(node.file!, node.canvas)
     })
 
   }
 
-  private togglePortal(node: CanvasNode) {
-    const nodeData = node.getData() as CanvasFileNodeData
-    const open = !nodeData.portal
+  private addParentNavigation(canvas: Canvas) {
+    canvas.canvasControlsEl.querySelector(`.${PARENT_NAV_CLASS}`)?.remove()
 
-    node.setData({
-      ...nodeData,
-      portal: open,
-      width: open ? nodeData.width : DEFAULT_NODE_SIZE.width,
-      height: open ? nodeData.height : DEFAULT_NODE_SIZE.height
+    const parentFile = this.getParentCanvasFile(canvas.view.file.path)
+    if (!parentFile) return
+
+    const controls = canvas.canvasControlsEl.createDiv({ cls: PARENT_NAV_CLASS })
+    const backButton = controls.createEl('button', { cls: 'clickable-icon' })
+    setIcon(backButton, 'arrow-left')
+    setTooltip(backButton, 'Back to parent canvas', { placement: 'left' })
+    backButton.addEventListener('click', () => void this.openCanvasFile(parentFile, canvas))
+
+    const parentLink = controls.createEl('button', {
+      cls: 'nested-canvas-parent-link',
+      text: parentFile.basename
     })
-    node.currentPortalFile = open ? nodeData.file : undefined
-    node.canvas.setData(node.canvas.getData())
+    parentLink.addEventListener('click', () => void this.openCanvasFile(parentFile, canvas))
+  }
+
+  private async openCanvasFile(file: TFile, canvas: Canvas) {
+    await canvas.view.leaf.openFile(file)
+  }
+
+  private getParentCanvasFile(childPath: string): TFile | null {
+    const lastSlash = childPath.lastIndexOf('/')
+    if (lastSlash < 0) return null
+
+    const parentPath = `${childPath.substring(0, lastSlash)}.canvas`
+    return this.plugin.app.vault.getFileByPath(parentPath)
+  }
+
+  private getSelectedCanvasFileNode(canvas: Canvas): CanvasNode | null {
+    if (canvas.selection.size !== 1) return null
+    const node = [...canvas.selection][0] as CanvasNode
+    return this.isCanvasFileNode(node) ? node : null
+  }
+
+  private isCanvasFileNode(node: CanvasNode): boolean {
+    const nodeData = node.getData() as CanvasFileNodeData
+    return nodeData.type === 'file' && node.file?.extension === 'canvas'
+  }
+
+  private getNextNodePosition(data: CanvasData): Position {
+    if (data.nodes.length === 0) return { x: 0, y: 0 }
+
+    return {
+      x: Math.max(...data.nodes.map(node => node.x + node.width)) + CanvasHelper.GRID_SIZE * 2,
+      y: Math.min(...data.nodes.map(node => node.y))
+    }
   }
 
   private async ensureFolder(folderPath: string) {
