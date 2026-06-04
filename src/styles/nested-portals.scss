@@ -1,0 +1,22 @@
+.canvas-node[data-is-canvas-file-node="true"] {
+  .canvas-node-label {
+    display: flex;
+    align-items: center;
+    gap: var(--size-2-1);
+  }
+
+  .nested-portal-expand-button {
+    margin-left: auto;
+    pointer-events: all;
+  }
+
+  &:not([data-is-portal-loaded="true"]) {
+    .canvas-node-content {
+      display: none;
+    }
+
+    .canvas-node-container {
+      background-color: var(--background-primary);
+    }
+  }
+}
