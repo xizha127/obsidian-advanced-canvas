@@ -35,6 +35,7 @@ import EncapsulateCanvasExtension from './canvas-extensions/encapsulate-canvas-e
 import CommandsCanvasExtension from './canvas-extensions/commands-canvas-extension'
 import AutoResizeNodeCanvasExtension from './canvas-extensions/auto-resize-node-canvas-extension'
 import PortalsCanvasExtension from './canvas-extensions/portals-canvas-extension'
+import CharkoalNestedCanvasExtension from './canvas-extensions/charkoal-nested-canvas-extension'
 import FrontmatterControlButtonCanvasExtension from './canvas-extensions/frontmatter-control-button-canvas-extension'
 import BetterDefaultSettingsCanvasExtension from './canvas-extensions/better-default-settings-canvas-extension'
 import ColorPaletteCanvasExtension from './canvas-extensions/color-palette-canvas-extension'
@@ -92,6 +93,7 @@ const CANVAS_EXTENSIONS: typeof CanvasExtension[] = [
   CollapsibleGroupsCanvasExtension,
   ColorPaletteCanvasExtension,
   PresentationCanvasExtension,
+  CharkoalNestedCanvasExtension,
   PortalsCanvasExtension,
 
   // UI Extensions (Non-savable data)

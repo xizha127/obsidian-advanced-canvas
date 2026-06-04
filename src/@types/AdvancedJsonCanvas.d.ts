@@ -12,9 +12,29 @@ export interface CanvasData extends OriginalCanvasData {
 export interface CanvasGroupNodeData extends OriginalCanvasGroupNodeData {
   // Intermediate values that are not saved in the canvas
   collapsedData?: CanvasElementsData
+  charkoalNestedCanvas?: CharkoalNestedCanvasIntermediateData
 }
 
 export interface CanvasFileNodeData extends OriginalCanvasFileNodeData {
   // Intermediate values that are not saved in the canvas
   isPortalLoaded?: boolean
+}
+
+export interface CharkoalCanvasData {
+  nodes: CharkoalAnyCanvasNodeData[]
+  edges: CanvasEdgeData[]
+}
+
+export type CharkoalAnyCanvasNodeData = AnyCanvasNodeData | CharkoalNestedCanvasNodeData
+
+export interface CharkoalNestedCanvasNodeData extends Omit<CanvasNodeData, 'type'> {
+  type: 'nested-canvas'
+  canvas: CharkoalCanvasData
+  title: string
+}
+
+export interface CharkoalNestedCanvasIntermediateData {
+  original: Omit<CharkoalNestedCanvasNodeData, 'canvas'>
+  sourceMinX: number
+  sourceMinY: number
 }

@@ -1,9 +1,9 @@
 {
   "id": "advanced-canvas",
   "name": "Advanced Canvas",
-  "version": "6.2.0",
+  "version": "6.2.0-charkoal.1",
   "minAppVersion": "1.7.2",
-  "description": "Supercharge your canvas experience! Create presentations, flowcharts and more!",
+  "description": "Advanced Canvas fork with Charkoal canvas compatibility.",
   "author": "Developer-Mike",
   "authorUrl": "https://github.com/Developer-Mike",
   "fundingUrl": "https://ko-fi.com/X8X27IA08",

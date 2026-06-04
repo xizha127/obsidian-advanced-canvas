@@ -99,6 +99,8 @@ export interface AdvancedCanvasPluginSettingsValues {
   portalsFeatureEnabled: boolean
   showEdgesIntoDisabledPortals: boolean
 
+  charkoalSupportEnabled: boolean
+
   autoFileNodeEdgesFeatureEnabled: boolean
   autoFileNodeEdgesFrontmatterKey: string
 
@@ -195,6 +197,8 @@ export const DEFAULT_SETTINGS_VALUES: AdvancedCanvasPluginSettingsValues = {
 
   portalsFeatureEnabled: true,
   showEdgesIntoDisabledPortals: true,
+
+  charkoalSupportEnabled: true,
 
   autoFileNodeEdgesFeatureEnabled: false,
   autoFileNodeEdgesFrontmatterKey: 'canvas-edges',
@@ -336,6 +340,11 @@ export const SETTINGS = {
         type: 'boolean'
       }
     }
+  },
+  charkoalSupportEnabled: {
+    label: 'Charkoal compatibility',
+    description: 'Render and preserve Charkoal nested canvas nodes when editing canvas files in Obsidian.',
+    children: { }
   },
   collapsibleGroupsFeatureEnabled: {
     label: 'Collapsible groups',

@@ -88,6 +88,8 @@ export interface CustomWorkspaceEvents {
   'advanced-canvas:redo': (canvas: Canvas) => void
   /** Fired when the readonly state of the canvas changes */
   'advanced-canvas:readonly-changed': (canvas: Canvas, readonly: boolean) => void
+  /** Fired after raw canvas JSON is parsed, before Obsidian can discard unsupported node types */
+  'advanced-canvas:raw-data-loaded:before': (data: CanvasData, changedRef: { value: boolean }) => void
   /** Fired when the canvas data gets requested */
   'advanced-canvas:data-requested': (canvas: Canvas, data: CanvasData) => void
   /** Fired before the canvas data gets set */

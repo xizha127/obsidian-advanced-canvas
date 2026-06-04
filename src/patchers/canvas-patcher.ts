@@ -80,6 +80,10 @@ export default class CanvasPatcher extends Patcher {
             if (this.file) that.plugin.createFileSnapshot(this.file.path, json)
             json = JSON.stringify(MigrationHelper.migrate(canvasData))
           }
+
+          const rawDataChangedRef = { value: false }
+          that.plugin.app.workspace.trigger('advanced-canvas:raw-data-loaded:before', canvasData, rawDataChangedRef)
+          if (rawDataChangedRef.value) json = JSON.stringify(canvasData, null, 2)
         } catch (e) {
           console.error('Failed to migrate canvas data:', e)
         }
